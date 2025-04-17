@@ -86,8 +86,9 @@ def log_control_info(robot: Robot, dt_s, episode_index=None, frame_index=None, f
 def is_headless():
     """Detects if python is running without a monitor."""
     try:
+        print("Running in headless mode. Checking for display...")
         import pynput  # noqa
-
+        print("pynput imported successfully.")
         return False
     except Exception:
         print(
@@ -132,6 +133,7 @@ def init_keyboard_listener():
     # Allow to exit early while recording an episode or resetting the environment,
     # by tapping the right arrow key '->'. This might require a sudo permission
     # to allow your terminal to monitor keyboard events.
+    print("Initializing keyboard listener...")
     events = {}
     events["exit_early"] = False
     events["rerecord_episode"] = False
@@ -144,6 +146,7 @@ def init_keyboard_listener():
         listener = None
         return listener, events
 
+    print("Importing pynput")
     # Only import pynput if not in a headless environment
     from pynput import keyboard
 

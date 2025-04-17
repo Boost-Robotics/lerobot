@@ -404,8 +404,10 @@ def _init_rerun(control_config: ControlConfig, session_name: str = "lerobot_cont
 
 @parser.wrap()
 def control_robot(cfg: ControlPipelineConfig):
+    print(cfg)
     init_logging()
     logging.info(pformat(asdict(cfg)))
+    print(cfg.robot)
 
     robot = make_robot_from_config(cfg.robot)
 
