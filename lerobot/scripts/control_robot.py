@@ -238,6 +238,8 @@ def teleoperate(robot: Robot, cfg: TeleoperateControlConfig):
         fps=cfg.fps,
         teleoperate=True,
         display_data=cfg.display_data,
+        record_wps= cfg.record_wps,
+        play_wps=cfg.play_wps,
     )
 
 

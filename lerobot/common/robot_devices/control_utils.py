@@ -115,6 +115,7 @@ def predict_action(observation, policy, device, use_amp):
                 observation[name] = observation[name].permute(2, 0, 1).contiguous()
             observation[name] = observation[name].unsqueeze(0)
             observation[name] = observation[name].to(device)
+            print(f"observation[{name}].shape: {observation[name].shape}")
 
         # Compute the next action with the policy
         # based on the current observation
@@ -224,6 +225,8 @@ def control_loop(
     policy: PreTrainedPolicy = None,
     fps: int | None = None,
     single_task: str | None = None,
+    record_wps: bool = False,
+    play_wps: bool = False,
 ):
     # TODO(rcadene): Add option to record logs
     if not robot.is_connected:
@@ -250,10 +253,12 @@ def control_loop(
         start_loop_t = time.perf_counter()
 
         if teleoperate:
-            observation, action = robot.teleop_step(record_data=True)
+            observation, action = robot.teleop_step(record_data=True, 
+                                                    record_wps=record_wps,
+                                                    play_wps=play_wps)
         else:
             observation = robot.capture_observation()
-
+         
             if policy is not None:
                 pred_action = predict_action(
                     observation, policy, get_safe_torch_device(policy.config.device), policy.config.use_amp
@@ -269,20 +274,21 @@ def control_loop(
 
         # TODO(Steven): This should be more general (for RemoteRobot instead of checking the name, but anyways it will change soon)
         if (display_data and not is_headless()) or (display_data and robot.robot_type.startswith("lekiwi")):
+            #print(action)
             for k, v in action.items():
                 for i, vv in enumerate(v):
                     rr.log(f"sent_{k}_{i}", rr.Scalar(vv.numpy()))
 
-            image_keys = [key for key in observation if "image" in key]
-            for key in image_keys:
-                rr.log(key, rr.Image(observation[key].numpy()), static=True)
+            # image_keys = [key for key in observation if "image" in key]
+            # for key in image_keys:
+            #     rr.log(key, rr.Image(observation[key].numpy()), static=True)
 
         if fps is not None:
             dt_s = time.perf_counter() - start_loop_t
             busy_wait(1 / fps - dt_s)
 
         dt_s = time.perf_counter() - start_loop_t
-        log_control_info(robot, dt_s, fps=fps)
+        #log_control_info(robot, dt_s, fps=fps)
 
         timestamp = time.perf_counter() - start_episode_t
         if events["exit_early"]:

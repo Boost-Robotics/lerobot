@@ -42,6 +42,8 @@ class TeleoperateControlConfig(ControlConfig):
     teleop_time_s: float | None = None
     # Display all cameras on screen
     display_data: bool = False
+    record_wps: bool = False
+    play_wps: bool = False
 
 
 @ControlConfig.register_subclass("record")

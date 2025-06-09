@@ -26,6 +26,7 @@ from lerobot.common.robot_devices.cameras.configs import (
 from lerobot.common.robot_devices.motors.configs import (
     DynamixelMotorsBusConfig,
     FeetechMotorsBusConfig,
+    GelloMotorsBusConfig,
     MotorsBusConfig,
 )
 
@@ -487,13 +488,122 @@ class So100RobotConfig(ManipulatorRobotConfig):
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
             "wrist_cam": OpenCVCameraConfig(
-                camera_index=0,
+                camera_index=2,
                 fps=30,
                 width=640,
                 height=480,
             ),
             "ego_cam": OpenCVCameraConfig(
-                camera_index=2,
+                camera_index=6,
+                fps=30,
+                width=640,
+                height=480,
+            ),
+        }
+    )
+
+    mock: bool = False
+
+@RobotConfig.register_subclass("xarm6")
+@dataclass
+class Xarm6RobotConfig(ManipulatorRobotConfig):
+    calibration_dir: str = ".cache/calibration/so100"
+    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
+    # the number of motors in your follower arms.
+
+    
+
+    max_relative_target: int | None = None
+
+    leader_arms: dict[str, MotorsBusConfig] = field(
+        default_factory=lambda: {
+            "left": GelloMotorsBusConfig(
+                port="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTA7NNAZ-if00-port0",
+                motors={
+                    # name: (index, model)
+                    "shoulder_pan": [1, "gello"],
+                    "shoulder_lift": [2, "gello"],
+                    "elbow_flex": [3, "gello"],
+                    "wrist_yaw": [4, "gello"],
+                    "wrist_flex": [5, "gello"],
+                    "wrist_roll": [6, "gello"],
+                    "gripper": [7, "gello"],
+                },
+            ),
+            "right": GelloMotorsBusConfig(
+                port="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTA7NN9P-if00-port0",
+                motors={
+                    # name: (index, model)
+                    "shoulder_pan": [1, "gello"],
+                    "shoulder_lift": [2, "gello"],
+                    "elbow_flex": [3, "gello"],
+                    "wrist_yaw": [4, "gello"],
+                    "wrist_flex": [5, "gello"],
+                    "wrist_roll": [6, "gello"],
+                    "gripper": [7, "gello"],
+                },
+            )
+        }
+    )
+
+    
+
+
+    follower_arms: dict[str, MotorsBusConfig] = field(
+        default_factory=lambda: {
+            "left": GelloMotorsBusConfig(
+                port="/dev/follower1",
+                motors={
+                    # name: (index, model)
+                    "shoulder_pan": [1, "gello"],
+                    "shoulder_lift": [2, "gello"],
+                    "elbow_flex": [3, "gello"],
+                    "wrist_yaw": [4, "gello"],
+                    "wrist_flex": [5, "gello"],
+                    "wrist_roll": [6, "gello"],
+                    "gripper": [7, "gello"],
+                },
+            ),
+            "right": GelloMotorsBusConfig(
+                port="/dev/follower2",
+                motors={
+                    # name: (index, model)
+                    "shoulder_pan": [1, "gello"],
+                    "shoulder_lift": [2, "gello"],
+                    "elbow_flex": [3, "gello"],
+                    "wrist_yaw": [4, "gello"],
+                    "wrist_flex": [5, "gello"],
+                    "wrist_roll": [6, "gello"],
+                    "gripper": [7, "gello"],
+                },
+            ),
+        }
+    )
+ 
+
+    cameras: dict[str, CameraConfig] = field(
+        default_factory=lambda: {
+            "right_wrist_cam": IntelRealSenseCameraConfig(
+                serial_number=819112071093, use_depth=False,
+                fps=30,
+                width=640,
+                height=480,
+            ),
+            "left_wrist_cam": IntelRealSenseCameraConfig(
+                serial_number=137322070266, use_depth=False,
+                fps=30,
+                width=640,
+                height=480,
+            ),
+            "ego_cam": IntelRealSenseCameraConfig(
+                serial_number=137222072104, use_depth=False,
+                fps=30,
+                width=640,
+                height=480,
+            ),
+            "ego_cam2": OpenCVCameraConfig(
+                camera_index=0,
                 fps=30,
                 width=640,
                 height=480,

@@ -1,0 +1,2 @@
+python lerobot/scripts/control_robot.py   --robot.type=xarm6   --control.type=teleoperate  --control.record_wps=false --control.play_wps=true --control.display_data=true
+

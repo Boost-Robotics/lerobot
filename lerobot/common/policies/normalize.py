@@ -50,7 +50,11 @@ def create_stats_buffers(
             # sanity checks
             assert len(shape) == 3, f"number of dimensions of {key} != 3 ({shape=}"
             c, h, w = shape
-            assert c < h and c < w, f"{key} is not channel first ({shape=})"
+
+            if c >  h or c > w:
+                h,w,c = shape
+
+            #assert c < h and c < w, f"{key} is not channel first ({shape=})"
             # override image shape to be invariant to height and width
             shape = (c, 1, 1)
 

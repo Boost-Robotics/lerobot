@@ -30,6 +30,7 @@ from threading import Thread
 
 import numpy as np
 from PIL import Image
+import cv2
 
 from lerobot.common.robot_devices.cameras.configs import IntelRealSenseCameraConfig
 from lerobot.common.robot_devices.utils import (
@@ -40,6 +41,80 @@ from lerobot.common.robot_devices.utils import (
 from lerobot.common.utils.utils import capture_timestamp_utc
 
 SERIAL_NUMBER_INDEX = 1
+
+def rotate_image(image, angle, scale=1.0):
+    (h, w) = image.shape[:2]
+    center = (w / 2, h / 2)
+
+    # Get the rotation matrix
+    M = cv2.getRotationMatrix2D(center, angle, scale)
+
+    # Compute the bounding box of the new image so no parts are cut off
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+    new_w = int((h * sin) + (w * cos))
+    new_h = int((h * cos) + (w * sin))
+
+    # Adjust the rotation matrix to take into account translation
+    # M[0, 2] += (new_w / 2) - center[0]
+    # M[1, 2] += (new_h / 2) - center[1]
+
+    # Perform the rotation
+    rotated = cv2.warpAffine(image, M, (w, h))
+    return rotated
+
+def get_views(image, w_T_cam):
+    z_rot_by_90 = np.array(
+        [
+            [0, -1, 0],
+            [1, 0, 0],
+            [0, 0, 1],
+        ],
+        dtype=np.float32,
+    )
+    w_T_birds_eye = np.array(
+        [
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 0, -1],
+        ],
+        dtype=np.float32,
+    )
+    w_T_birds_eye = w_T_birds_eye @ z_rot_by_90
+
+    w_T_forward = np.array(
+        [
+            [0, 0, 1.0000000],
+            [-1.0000000, 0, 0],
+            [0, -1.0000000, 0],
+        ],
+        dtype=np.float32,
+    )
+    
+    R_birds = w_T_birds_eye.T @ (w_T_cam @ z_rot_by_90)
+    R_forward = w_T_forward.T @ (w_T_cam @ z_rot_by_90)
+
+    f = 600
+    h, w = image.shape[:2]
+    K = np.array([f, 0, w / 2, 0, f, h / 2, 0, 0, 1]).reshape(3, 3)
+    K_new = K.copy()
+    # Decrease the focal length to zoom out
+    K_new[0, 0] = f * 1.0
+    K_new[1, 1] = f * 1.0
+    K_inv = np.linalg.inv(K)
+    #K_inv = np.linalg.inv(K)
+    
+    H_bird = K_new @ R_birds @ K_inv
+    H_bird /= H_bird[2, 2]  # Normalize the homography matrix
+
+    H_forward = K_new @ R_forward @ K_inv
+    H_forward /= H_forward[2, 2]  # Normalize the homography matrix
+    birds_eye_view = cv2.warpPerspective(image, H_bird, (w, h), flags=cv2.INTER_LINEAR)
+    forward_view = cv2.warpPerspective(image, H_forward, (w, h), flags=cv2.INTER_LINEAR)
+    
+    # conatenate the two views horizontally
+    view = np.concatenate((forward_view, image, birds_eye_view), axis=0)
+    return view
 
 
 def find_cameras(raise_when_empty=True, mock=False) -> list[dict]:
@@ -251,6 +326,9 @@ class IntelRealSenseCamera:
         self.color_image = None
         self.depth_map = None
         self.logs = {}
+        self.rot_lock = threading.Lock()
+        self.yaw_correction = 0
+        self.curr_rot = np.eye(3, dtype=np.float32)
 
         if self.mock:
             import tests.cameras.mock_cv2 as cv2
@@ -378,7 +456,7 @@ class IntelRealSenseCamera:
             import tests.cameras.mock_cv2 as cv2
         else:
             import cv2
-
+        
         start_time = time.perf_counter()
 
         frame = self.camera.wait_for_frames(timeout_ms=5000)
@@ -406,8 +484,17 @@ class IntelRealSenseCamera:
                 f"Can't capture color image with expected height and width ({self.height} x {self.width}). ({h} x {w}) returned instead."
             )
 
+        rot_comp = 0
+        with self.rot_lock:
+            rot_comp = self.yaw_correction
+            curr_rot = self.curr_rot.copy()
+
         if self.rotation is not None:
             color_image = cv2.rotate(color_image, self.rotation)
+
+        if rot_comp != 0:
+            #color_image = get_views(color_image, curr_rot)
+            color_image = rotate_image(color_image, rot_comp)
 
         # log the number of seconds it took to read the image
         self.logs["delta_timestamp_s"] = time.perf_counter() - start_time
@@ -442,7 +529,7 @@ class IntelRealSenseCamera:
             else:
                 self.color_image = self.read()
 
-    def async_read(self):
+    def async_read(self, curr_rot = np.eye(3), yaw_correction: float = 0.0):
         """Access the latest color image"""
         if not self.is_connected:
             raise RobotDeviceNotConnectedError(
@@ -464,6 +551,10 @@ class IntelRealSenseCamera:
                 raise Exception(
                     "The thread responsible for `self.async_read()` took too much time to start. There might be an issue. Verify that `self.thread.start()` has been called."
                 )
+
+        with self.rot_lock:
+            self.yaw_correction = yaw_correction
+            self.curr_rot = curr_rot.copy()
 
         if self.use_depth:
             return self.color_image, self.depth_map
