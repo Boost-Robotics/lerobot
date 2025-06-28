@@ -401,7 +401,7 @@ def _init_rerun(control_config: ControlConfig, session_name: str = "lerobot_cont
         else:
             # Get memory limit for rerun viewer parameters
             memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-            rr.spawn(memory_limit=memory_limit)
+            rr.spawn(port=50051, memory_limit=memory_limit)
 
 
 @parser.wrap()

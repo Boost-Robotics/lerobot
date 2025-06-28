@@ -27,6 +27,7 @@ import threading
 
 import numpy as np
 import torch
+import time
 
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
 from lerobot.common.robot_devices.motors.utils import MotorsBus, make_motors_buses_from_configs
@@ -41,6 +42,17 @@ import pynput
 import os
 import ast
 import rerun as rr
+import cv2
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, LivelinessPolicy
+from rclpy.time import Time
+from sensor_msgs.msg import JointState
+from geometry_msgs.msg import PoseStamped
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image
+import copy
 
 
 # Move arms to initial positions
@@ -57,6 +69,8 @@ camera_thread = None
 set_init = False # To track if initial positions have been set
 redo_first = False # To track if we need to redo the first move
 on_right = 0
+
+image_folder = "/root/boost_ws/training_data"
 
 
 def set_to_initial_positions():
@@ -103,7 +117,7 @@ keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
 keyboard_listener.start()
 
 fixed_points = []
-with open("/home/hans/curr_wps.txt", "r") as f:
+with open("/root/boost_ws/non_ros_pkgs/lerobot/curr_wps.txt", "r") as f:
     #get point from first 4 lines
     for line in f.readlines():
         if line.strip():
@@ -127,47 +141,68 @@ with open("/home/hans/curr_wps.txt", "r") as f:
 # ret, angles = arms[1].get_inverse_kinematics(pose, input_is_radian=True, return_is_radian=True)
 # print("IK angles!", angles)
 
+class PoseSubscriber(Node):
+    def __init__(self):
+        super().__init__('pose_subscriber')
+
+        # Create a joint state publisher
+        self.joint_state_pub = self.create_publisher(
+            JointState,
+            'joint_command',
+            1
+        )
+        self.joint_state_pub  # Prevent unused variable warning
+
+        self.image_pubs = {}
+
+        self.bridge = CvBridge()
+
+        # Create a network switch pose subscriber
+        self.pose_sub = self.create_subscription(
+            PoseStamped,
+            'switch_pose',
+            self.pose_callback,
+            1
+        )
+        self.switch_poses_queue = []
+        self.latest_good_switch_pose = None
+
+    def pose_callback(self, msg: PoseStamped):
+        if msg.header.frame_id != "/camera/right_wrist_cam/image_raw":
+            # Ignore messages that are not from the right wrist camera
+            return
+
+        # Extract the pose from the message
+        pose = msg.pose
+
+        print(f"Received pose: {pose}")
+
+        # Append the pose to the switch_poses list
+        self.switch_poses_queue.append(pose)
+
+        if len(self.switch_poses_queue) > 10:
+
+            # Average the last 5 poses
+            avg_pose = PoseStamped()
+            avg_pose.pose.position.x = sum(p.position.x for p in self.switch_poses_queue) / len(self.switch_poses_queue)
+            avg_pose.pose.position.y = sum(p.position.y for p in self.switch_poses_queue) / len(self.switch_poses_queue)
+            avg_pose.pose.position.z = sum(p.position.z for p in self.switch_poses_queue) / len(self.switch_poses_queue)
+
+            # Check if current pose is close to the average pose
+            if (abs(pose.position.x - avg_pose.pose.position.x) < 0.001 and
+                abs(pose.position.y - avg_pose.pose.position.y) < 0.001 and
+                abs(pose.position.z - avg_pose.pose.position.z) < 0.001):
+                self.latest_good_switch_pose = pose
+                
+
+            
+            self.switch_poses_queue.pop(0)
 
 
-def cable_dance():
-   
-    arm = arms[1] 
-    arm.set_mode(0)
-    arm.set_state(state=0)
+
   
-    
-    print("MOVING FIRST!!!")
-    arm.set_gripper_position(150, wait=True)
-    #load fixed points from file
-    global fixed_points
-    global on_right
-    print(f"Fixed points loaded: {fixed_points}")
-    
-    #make copy fixed points
-    points_to_follow = fixed_points.copy() 
-    if on_right == 0:
-        points_to_follow = points_to_follow[0:7]
-        on_right = 1
-    elif on_right == 1:
-        points_to_follow = points_to_follow[7:14]
-        on_right = 0
-    elif on_right == 2:
-        points_to_follow == points_to_follow[0:14]
-        
-    for point in points_to_follow:
-        print(f"Moving to fixed point: {point}")
- 
-        #arm.set_position(x=point[0], y=point[1], z=point[2], roll=point[3], pitch=point[4], yaw=point[5], speed=75, wait=True, is_radian=True)
-        arm.set_servo_angle(angle=point[0:6],wait=True, speed=0.4, is_radian=True)
-        arm.set_gripper_position(point[6], wait=False)
-        time.sleep(0.25)
-    
-    # last_point = fixed_points[-1]
-    # last_point[0]-= 200
-    # arm.set_position(x=last_point[0], y=last_point[1], z=last_point[2], roll=last_point[3], pitch=last_point[4], yaw=last_point[5], speed=75, wait=True, is_radian=True)
- 
-    arm.set_mode(1)
-    arm.set_state(state=0)
+
+
 
 
 def ensure_safe_goal_position(
@@ -305,7 +340,164 @@ class ManipulatorRobot:
         self.logs = {}
         self.ee_poses = []
         self.ee_poses_lock = threading.Lock()
-  
+        rclpy.init()
+        self.sub = PoseSubscriber()
+        self.never_done_cable_dance = True  # Flag to track if cable dance has been done before
+        
+    
+
+    def cable_dance(self):
+    
+        arm = arms[1] 
+        arm.set_mode(0)
+        arm.set_state(state=0)
+    
+        
+        print("MOVING FIRST!!!")
+        arm.set_gripper_position(150, wait=True)
+        #load fixed points from file
+        global fixed_points
+        global on_right
+        print(f"Fixed points loaded: {fixed_points}")
+        
+        #make copy fixed points
+        points_to_follow = fixed_points.copy() 
+        if on_right == 0:
+            points_to_follow = points_to_follow[0:7]
+            on_right = 1
+        elif on_right == 1:
+            points_to_follow = points_to_follow[7:14]
+            on_right = 0
+        elif on_right == 2:
+            points_to_follow == points_to_follow[0:14]
+            
+        for point in points_to_follow:
+            print(f"Moving to fixed point: {point}")
+    
+            #arm.set_position(x=point[0], y=point[1], z=point[2], roll=point[3], pitch=point[4], yaw=point[5], speed=75, wait=True, is_radian=True)
+            
+            joint_state = JointState()
+            joint_state.header.stamp = self.sub.get_clock().now().to_msg()
+            joint_state.name = ["joint1_1", "joint2_1", "joint3_1", "joint4_1", "joint5_1", "joint6_1"]
+            
+            arm.set_servo_angle(angle=point[0:6],wait=False, speed=0.4, is_radian=True)
+            while True:
+                present_pos = arm.get_servo_angle(is_radian=True)[1]
+                joint_state.position = present_pos[0:6] 
+                joint_state.position[0] += np.pi/2
+                self.sub.joint_state_pub.publish(joint_state)
+                if np.allclose(present_pos[0:6], point[0:6], atol=0.01):
+                    break
+                time.sleep(1/30.0)
+
+            
+            joint_state.name = ["finger_joint1"]
+            if point[6] > 100:
+                joint_state.position  = [0.1]
+            else:
+                joint_state.position = [0.5]
+            #joint_state.position = [1 - point[6]/17.0]
+            print(f"Setting gripper position: {joint_state.position}")
+            self.sub.joint_state_pub.publish(joint_state)
+            arm.set_gripper_position(point[6], wait=False)
+            time.sleep(0.25)
+        
+        # last_point = fixed_points[-1]
+        # last_point[0]-= 200
+        # arm.set_position(x=last_point[0], y=last_point[1], z=last_point[2], roll=last_point[3], pitch=last_point[4], yaw=last_point[5], speed=75, wait=True, is_radian=True)
+    
+        arm.set_mode(1)
+        arm.set_state(state=0)
+
+    def cable_dance_vision(self):
+    
+        arm = arms[1] 
+        arm.set_mode(0)
+        arm.set_state(state=0)      
+        print("MOVING FIRST!!!")
+        
+
+        self.latest_good_switch_pose = None
+        while self.latest_good_switch_pose == None:
+            print("Waiting for a good switch pose...")
+            rclpy.spin_once(self.sub, timeout_sec=0.1)
+            print(f"Received good switch pose: {self.sub.latest_good_switch_pose}")
+            time.sleep(0.1)
+            if self.sub.latest_good_switch_pose is not None:
+                target_pose = copy.deepcopy(self.sub.latest_good_switch_pose)
+                break
+        # Get arm position:
+        #ret, pose = arm.get_position(is_radian=True)
+        ee_pos = np.array(arm.get_position(is_radian=True)[1]).astype(np.float32)
+        
+        #arm.set_position(x=point[0], y=point[1], z=point[2], roll=point[3], pitch=point[4], yaw=point[5], speed=75, wait=True, is_radian=True)
+
+        rot = Rotation.from_euler('xyz', ee_pos[3:6], degrees=False).as_matrix()
+        world_T_ee = np.eye(4)
+        world_T_ee[:3, :3] = rot
+        world_T_ee[:3, 3] = ee_pos[:3]
+
+        
+        # ee_T_cam = np.eye(4)
+        # ee_T_cam[:3, :3] = np.array([[  0.0000000, -0.9563047, -0.2923717],
+        #                              [1.0000000,  0.0000000,  0.0000000],
+        #                              [  0.0000000, -0.2923717,  0.9563047 ]])
+    
+        # ee_T_cam[:3, 3] = np.array([30, 0, -55])  # 55mm in z
+        ee_T_cam = np.array([[ 0.03836671, -0.93560818, -0.35094917,  0.03494256*1000],
+                             [ 0.9992525,   0.03758719 , 0.0090359 , -0.00308324*1000],
+                             [ 0.00473713, -0.35103352,  0.93635091, -0.0662823*1000],
+                             [ 0.,          0. ,         0.  ,        1.        ]])
+
+        
+        
+        #rot90 in z -66.35 degrees in x, x30mm, y0mm, z - 55mm
+        
+        cam_T_target = np.eye(4)
+        cam_T_target[:3, :3] = Rotation.from_quat([
+            target_pose.orientation.x,
+            target_pose.orientation.y,
+            target_pose.orientation.z,
+            target_pose.orientation.w
+        ]).as_matrix()
+        cam_T_target[:3, 3] = np.array([
+            target_pose.position.x*1000,
+            target_pose.position.y*1000,
+            target_pose.position.z*1000
+        ])
+    
+        world_T_target = world_T_ee @ ee_T_cam @ cam_T_target
+        
+        print(f"Target pose in world frame: {world_T_target}")
+        
+        #get roll pitch yaw from world_T_target
+        target_rot = Rotation.from_matrix(world_T_target[:3, :3])
+        target_euler = target_rot.as_euler('xyz', degrees=False)
+        print(f"Target euler angles: {target_euler}")
+        arm.set_gripper_position(200, wait=True)
+        arm.set_position(x=world_T_target[0, 3]-50, y=world_T_target[1, 3]+100, z=world_T_target[2, 3]+1, roll = target_euler[0], pitch=target_euler[1], yaw=target_euler[2], speed=150, wait=True, is_radian=True)
+        arm.set_position(x=world_T_target[0, 3]-20, y=world_T_target[1, 3]-4, z=world_T_target[2, 3]+1, roll = target_euler[0], pitch=target_euler[1], yaw=target_euler[2], speed=150, wait=True, is_radian=True)
+        arm.set_gripper_position(80, wait=True)
+        arm.set_position(x=world_T_target[0, 3]-200, y=world_T_target[1, 3]-4, z=world_T_target[2, 3]+1, roll = target_euler[0], pitch=target_euler[1], yaw=target_euler[2], speed=150, wait=True, is_radian=True)
+        arm.set_position(x=world_T_target[0, 3]-300, y=world_T_target[1, 3]-4, z=world_T_target[2, 3]-100, roll = 3.14, pitch=target_euler[1], yaw=target_euler[2], speed=150, wait=True, is_radian=True)
+        arm.set_gripper_position(700, wait=True)
+
+        # arm.set_servo_angle(angle=point[0:6],wait=False, speed=0.4, is_radian=True)
+        # while True:
+        #     present_pos = arm.get_servo_angle(is_radian=True)[1]
+        #     if np.allclose(present_pos[0:6], point[0:6], atol=0.01):
+        #         break
+        #     time.sleep(1/30.0)
+ 
+        # last_point = fixed_points[-1]
+        # last_point[0]-= 200
+        # arm.set_position(x=last_point[0], y=last_point[1], z=last_point[2], roll=last_point[3], pitch=last_point[4], yaw=last_point[5], speed=75, wait=True, is_radian=True)
+    
+        arm.set_mode(1)
+        arm.set_state(state=0)
+        self.sub.latest_good_switch_pose = None
+        #self.never_done_cable_dance = False
+        
 
     def get_motor_names(self, arm: dict[str, MotorsBus]) -> list:
         return [f"{arm}_{motor}" for arm, bus in arm.items() for motor in bus.motors]
@@ -363,6 +555,7 @@ class ManipulatorRobot:
         return available_arms
 
     def connect(self):
+        
         if self.is_connected:
             raise RobotDeviceAlreadyConnectedError(
                 "ManipulatorRobot is already connected. Do not run `robot.connect()` twice."
@@ -619,7 +812,9 @@ class ManipulatorRobot:
         # Try follow commands
         #return angle_deg
     def capture_images(self):
+        count = 0
         while True:
+            time_start = time.perf_counter()
             images = {}
             curr_ee_poses = []
             with self.ee_poses_lock:
@@ -648,10 +843,10 @@ class ManipulatorRobot:
                     for name in self.cameras:
                         yaw_correction = 0
                         curr_rot = np.eye(3)
-                        if "left" in name:
-                            yaw_correction, curr_rot = self.ee_pos_to_mat(curr_ee_poses[0])
-                        elif "right" in name:
-                            yaw_correction, curr_rot = self.ee_pos_to_mat(curr_ee_poses[1])
+                        # if "left" in name:
+                        #     yaw_correction, curr_rot = self.ee_pos_to_mat(curr_ee_poses[0])
+                        # elif "right" in name:
+                        #     yaw_correction, curr_rot = self.ee_pos_to_mat(curr_ee_poses[1])
                         before_camread_t = time.perf_counter()
                         
                         #print(f"Reading camera {name} with yaw correction: {yaw_correction}")
@@ -675,9 +870,36 @@ class ManipulatorRobot:
                         self.cameras[name].connect()
             image_keys = [key for key in images]
             for key in image_keys:
-                rr.log(key, rr.Image(images[key].numpy()), static=True)
+                #rr.log(key, rr.Image(images[key].numpy()), static=True)
+            
+                if key not in self.sub.image_pubs:
+                    # Create a publisher for the camera image
+                    image_pub = self.sub.create_publisher(
+                        Image, f"camera/{key}/image_raw", 1
+                    )
+                    self.sub.image_pubs[key] = image_pub
 
-            time.sleep(1.0 / 35.0)
+                # Publish the image using cv bridge
+                image_bgr = cv2.cvtColor(images[key].numpy(), cv2.COLOR_RGB2BGR)
+                ros_image = self.sub.bridge.cv2_to_imgmsg(image_bgr, encoding='bgr8')
+                ros_image.header.frame_id = key
+                ros_image.header.stamp = self.sub.get_clock().now().to_msg()
+                self.sub.image_pubs[key].publish(ros_image)
+
+
+                # if count % 30 == 0:
+                #     # Save images to a folder
+                #     folder = image_folder + f"/{key}"
+                #     if not os.path.exists(folder):
+                #         os.makedirs(folder)
+                #     image_path = os.path.join(folder, f"{time.time()}.png")
+                #     cv2.imwrite(image_path, image_bgr)
+
+            count += 1
+             
+            sleep_time = max(1.0 / 30.0 - (time.perf_counter() - time_start), 0)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
             
     def teleop_step(
         self, record_data=False, record_wps=False, play_wps=False
@@ -690,13 +912,13 @@ class ManipulatorRobot:
         global set_init
         if play_wps and record_wps:
             print("Playing waypoints, skipping initial position setting.")
-            cable_dance()
+            self.cable_dance()
         elif not set_init and not record_wps:
             print(f"Recording data: {record_data}, recording waypoints: {record_wps}, playing waypoints: {play_wps}")
             # If not recording or playing waypoints, we can set the initial positions of the arms
             set_to_initial_positions()
         
-
+        rclpy.spin_once(self.sub, timeout_sec=0.01)
 
        
         # Prepare to assign the position of the leader to the follower
@@ -772,12 +994,48 @@ class ManipulatorRobot:
                             arm.set_state(state=0)
                             print(f"Setting for {name} arm due to cable dance.")
                             while (True):
-                                ret = arm.set_servo_angle(angle=goal_pos.tolist(), speed=0.75, wait=True, is_radian=True)
+                                
+
+                                joint_state = JointState()
+                                joint_state.header.stamp = self.sub.get_clock().now().to_msg()
+                         
+                                
+                          
+
+                                #ret = arm.set_servo_angle(angle=goal_pos[0:6].tolist(), speed=0.75, wait=True, is_radian=True)
+                                ret = arm.set_servo_angle(angle=goal_pos[0:6].tolist(), wait=False, speed=1.25, is_radian=True)
+                                while True:
+                                    time.sleep(1/30.0)
+                                    present_pos = arm.get_servo_angle(is_radian=True)[1]
+                                    joint_state.position = present_pos[0:6] 
+                                    if i == 0:
+                                        joint_state.name = ["joint1_2", "joint2_2", "joint3_2", "joint4_2", "joint5_2", "joint6_2"]
+                                        joint_state.position[0] -= np.pi/2
+                                    else:
+                                        joint_state.name = ["joint1_1", "joint2_1", "joint3_1", "joint4_1", "joint5_1", "joint6_1"]
+                                        joint_state.position[0] += np.pi/2
+                                    self.sub.joint_state_pub.publish(joint_state)
+                                    if np.allclose(present_pos[0:6], goal_pos[0:6], atol=0.001):
+                                        break
+
+                                    
+
+                               
+                                
                                 new_pos = np.array(arm.get_servo_angle(is_radian=True)[1]).astype(np.float32)
                                 error = np.max(np.abs(goal_pos[0:6]-new_pos[0:6])/np.pi*180)
                                 if ret == 0 and error < 0.1:
                                     break
-                                print(f"{name} arm is not moving to init pos!!!")
+                                print(f"{name} arm is not moving to init pos!!! with error: {error} degrees, retrying...")
+
+                            arms[i].disconnect()
+                            arms[i] = XArmAPI(x_arm_ips[i])  # Reinitialize arm to reset state
+                            arm = arms[i]
+                            arm.motion_enable(enable=True)
+                            arm.set_mode(1)
+                            arm.set_state(state=0)
+                            arm.set_mode(0)
+                            arm.set_state(state=0)
                             arm.set_mode(1)
                             arm.set_state(state=0)
                             first[i] = False
@@ -806,10 +1064,23 @@ class ManipulatorRobot:
                                     print(f"Killing active gripper thread for {name} arm (idx {k}) before cable dance.")
                                     active_gripper_threads[k].join()
                                     active_gripper_threads[k] = None  # Clear the thread reference
-                            cable_dance()
+                            self.cable_dance()
                             redo_first = True
                             first[i] = True
                             first[0] = True
+                        elif self.sub.latest_good_switch_pose != None and i == 1 and self.never_done_cable_dance:
+                            print("DOING THE VISION CABLE DANCE")
+                            #kill gripper threads
+                            for k in range(2):
+                                if active_gripper_threads[k] is not None:
+                                    print(f"Killing active gripper thread for {name} arm (idx {k}) before cable dance.")
+                                    active_gripper_threads[k].join()
+                                    active_gripper_threads[k] = None  # Clear the thread reference
+                            self.cable_dance_vision()
+                            redo_first = True
+                            first[i] = True
+                            #first[0] = True
+
                         else:
                             arm.set_servo_angle_j(goal_pos.tolist(), is_radian=True)
                     else:
@@ -880,7 +1151,7 @@ class ManipulatorRobot:
         if space_pressed:
             # Append current waypoint to a file
      
-            waypoints_file = "/home/hans/curr_wps.txt"
+            waypoints_file = "/root/boost_ws/non_ros_pkgs/lerobot/curr_wps.txt"
             # Check if the file exists, if not create it
             if record_wps:
                 with open(waypoints_file, "a") as f:
@@ -902,7 +1173,22 @@ class ManipulatorRobot:
         # Early exit when recording data is not requested
         if not record_data:
             return
- 
+
+        
+
+        joint_state = JointState()
+        joint_state.header.stamp = self.sub.get_clock().now().to_msg()
+        joint_state.name = ["joint1_1", "joint2_1", "joint3_1", "joint4_1", "joint5_1", "joint6_1", "finger_joint1",
+                            "joint1_2", "joint2_2", "joint3_2", "joint4_2", "joint5_2", "joint6_2", "finger_joint2"]
+
+        pos1 = (action.numpy()[0:7]/180.0*np.pi).tolist()
+        pos2 = (action.numpy()[7:14]/180.0*np.pi).tolist()
+        pos1[0]-= np.pi/2
+        pos2[0]+= np.pi/2
+        pos1[6] = 1 - pos1[6]/17.0
+        pos2[6] = 1 - pos2[6]/17.0
+        joint_state.position = pos2 + pos1 
+        self.sub.joint_state_pub.publish(joint_state)
     
         # just take j4 and j6 
         # Capture images from cameras
@@ -1043,6 +1329,8 @@ class ManipulatorRobot:
             self.cameras[name].disconnect()
 
         self.is_connected = False
+
+        rclpy.shutdown()
 
     def __del__(self):
         if getattr(self, "is_connected", False):
