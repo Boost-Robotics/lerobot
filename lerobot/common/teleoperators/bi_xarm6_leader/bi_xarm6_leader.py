@@ -214,7 +214,7 @@ class BiXarm6Leader(Teleoperator):
             if motor == "joint5":
                 action[f"left_{motor}.pos"] += 90
             if motor == "gripper":
-                action[f"left_{motor}.pos"]*=10
+                action[f"left_{motor}.pos"]*=8
         for motor, val in right_action.items():
             action[f"right_{motor}.pos"] = val
             if motor == "joint3":
@@ -222,7 +222,7 @@ class BiXarm6Leader(Teleoperator):
             if motor == "joint5":
                 action[f"right_{motor}.pos"] += 90
             if motor == "gripper":
-                action[f"right_{motor}.pos"]*=10
+                action[f"right_{motor}.pos"]*=8
 
         #print(action)
 

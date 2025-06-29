@@ -127,8 +127,8 @@ class BiXarm6Follower(Robot):
 
         # Read arm positions
         start = time.perf_counter()
-        code_left, joints_left = self._arms[0].get_servo_angle(is_radian=True)
-        code_right, joints_right = self._arms[1].get_servo_angle(is_radian=True)
+        code_left, joints_left = self._arms[0].get_servo_angle(is_radian=False)
+        code_right, joints_right = self._arms[1].get_servo_angle(is_radian=False)
         if code_left != 0 or code_right != 0:
             raise DeviceNotConnectedError(f"Failed to get joint angles from {self}")
         code_left_gripper, left_gripper_pos = self._arms[0].get_gripper_position()
