@@ -41,6 +41,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_so100_follower import BiSO100Follower
 
         return BiSO100Follower(config)
+    elif config.type == "bi_xarm6_follower":
+        from .bi_xarm6_follower import BiXarm6Follower
+
+        return BiXarm6Follower(config)
     elif config.type == "lekiwi":
         from .lekiwi import LeKiwi
 

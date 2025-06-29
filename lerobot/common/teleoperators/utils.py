@@ -37,6 +37,14 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .bi_so100_leader import BiSO100Leader
 
         return BiSO100Leader(config)
+    elif config.type == "bi_xarm6_leader":
+        from .bi_xarm6_leader import BiXarm6Leader
+
+        return BiXarm6Leader(config)
+    elif config.type == "xarm6_leader":
+        from .xarm6_leader import Xarm6Leader
+
+        return Xarm6Leader(config)
     elif config.type == "stretch3":
         from .stretch3_gamepad import Stretch3GamePad
 

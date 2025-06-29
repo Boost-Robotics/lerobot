@@ -42,6 +42,7 @@ from .common.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
+    xarm6_leader
 )
 
 COMPATIBLE_DEVICES = [
@@ -52,6 +53,7 @@ COMPATIBLE_DEVICES = [
     "so101_follower",
     "so101_leader",
     "lekiwi",
+    "xarm6_leader",
 ]
 
 

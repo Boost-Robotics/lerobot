@@ -45,12 +45,12 @@ class BiXarm6Leader(Teleoperator):
         self.left_bus = DynamixelMotorsBus(
             port=self.config.left_port,
             motors={
-                "joint1": Motor(1, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint2": Motor(2, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint3": Motor(3, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint4": Motor(4, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint5": Motor(5, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint6": Motor(6, "xl330-m077", MotorNormMode.RANGE_M100_100),
+                "joint1": Motor(1, "xl330-m288", MotorNormMode.DEGREES),
+                "joint2": Motor(2, "xl330-m288", MotorNormMode.DEGREES),
+                "joint3": Motor(3, "xl330-m288", MotorNormMode.DEGREES),
+                "joint4": Motor(4, "xl330-m288", MotorNormMode.DEGREES),
+                "joint5": Motor(5, "xl330-m288", MotorNormMode.DEGREES),
+                "joint6": Motor(6, "xl330-m288", MotorNormMode.DEGREES),
                 "gripper": Motor(7, "xl330-m077", MotorNormMode.RANGE_0_100),
             },
             calibration=self._get_left_calibration(),
@@ -60,12 +60,12 @@ class BiXarm6Leader(Teleoperator):
         self.right_bus = DynamixelMotorsBus(
             port=self.config.right_port,
             motors={
-                "joint1": Motor(1, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint2": Motor(2, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint3": Motor(3, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint4": Motor(4, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint5": Motor(5, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint6": Motor(6, "xl330-m077", MotorNormMode.RANGE_M100_100),
+                "joint1": Motor(1, "xl330-m288", MotorNormMode.DEGREES),
+                "joint2": Motor(2, "xl330-m288", MotorNormMode.DEGREES),
+                "joint3": Motor(3, "xl330-m288", MotorNormMode.DEGREES),
+                "joint4": Motor(4, "xl330-m288", MotorNormMode.DEGREES),
+                "joint5": Motor(5, "xl330-m288", MotorNormMode.DEGREES),
+                "joint6": Motor(6, "xl330-m288", MotorNormMode.DEGREES),
                 "gripper": Motor(7, "xl330-m077", MotorNormMode.RANGE_0_100),
             },
             calibration=self._get_right_calibration(),
@@ -78,7 +78,7 @@ class BiXarm6Leader(Teleoperator):
         import draccus
 
         left_calibration_path = (
-            Path("/home/*/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader")
+            Path("/home/hans/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader")
             / f"{self.config.left_id}.json"
         )
         if left_calibration_path.exists():
@@ -96,7 +96,7 @@ class BiXarm6Leader(Teleoperator):
         import draccus
 
         right_calibration_path = (
-            Path("/home/*/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader")
+            Path("/home/hans/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader")
             / f"{self.config.right_id}.json"
         )
         if right_calibration_path.exists():
@@ -154,13 +154,13 @@ class BiXarm6Leader(Teleoperator):
         if left_calibration is None:
             raise ValueError(
                 f"No calibration found for left arm (ID: {self.config.left_id}). "
-                "Please ensure calibration exists at /home/*/.cache/huggingface/lerobot/calibration/teleoperators/bi_xarm6_leader/"
+                "Please ensure calibration exists at /home/*/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader/"
             )
 
         if right_calibration is None:
             raise ValueError(
                 f"No calibration found for right arm (ID: {self.config.right_id}). "
-                "Please ensure calibration exists at /home/*/.cache/huggingface/lerobot/calibration/teleoperators/bi_xarm6_leader/"
+                "Please ensure calibration exists at /home/*/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader/"
             )
 
         # Write calibrations to both buses
@@ -203,13 +203,28 @@ class BiXarm6Leader(Teleoperator):
         # Read from both arms
         left_action = self.left_bus.sync_read("Present_Position")
         right_action = self.right_bus.sync_read("Present_Position")
+ 
 
         # Combine actions with prefixes
         action = {}
         for motor, val in left_action.items():
             action[f"left_{motor}.pos"] = val
+            if motor == "joint3":
+                action[f"left_{motor}.pos"] = -action[f"left_{motor}.pos"] - 90   
+            if motor == "joint5":
+                action[f"left_{motor}.pos"] += 90
+            if motor == "gripper":
+                action[f"left_{motor}.pos"]*=10
         for motor, val in right_action.items():
             action[f"right_{motor}.pos"] = val
+            if motor == "joint3":
+                action[f"right_{motor}.pos"] = -action[f"right_{motor}.pos"] - 90  
+            if motor == "joint5":
+                action[f"right_{motor}.pos"] += 90
+            if motor == "gripper":
+                action[f"right_{motor}.pos"]*=10
+
+        #print(action)
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")

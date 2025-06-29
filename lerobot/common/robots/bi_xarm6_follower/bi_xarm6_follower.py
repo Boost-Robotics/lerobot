@@ -25,6 +25,7 @@ from xarm.wrapper import XArmAPI
 
 from ..robot import Robot
 from .config_bi_xarm6_follower import BiXarm6FollowerConfig
+import copy
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,6 @@ class BiXarm6Follower(Robot):
         right_arm = XArmAPI(self.config.right_ip, is_radian=True)
         self._arms = [left_arm, right_arm]
         for enum_idx, arm in enumerate(self._arms):
-            arm.motion_enable(enable=False)
             arm.connect()
             arm.motion_enable(enable=True)
             arm.set_mode(1)  # Position mode
@@ -94,9 +94,10 @@ class BiXarm6Follower(Robot):
             arm.set_gripper_speed(5000)
 
             # set joint positions to jacobi, read from arm
-            code, joint_positions = self._arm.get_servo_angle()
+            code, joint_positions = self._arms[enum_idx].get_servo_angle()
             if code != 0:
-                raise DeviceNotConnectedError(f"Failed to get joint angles from {self}, arm: {"left" if enum_idx == 0 else "right"}")
+                name = "left" if enum_idx == 0 else "right"
+                raise DeviceNotConnectedError(f"Failed to get joint angles from {self}, arm: {name}")
 
         if not self.is_calibrated and calibrate:
             self.calibrate()
@@ -105,7 +106,7 @@ class BiXarm6Follower(Robot):
         for cam in self.cameras.values():
             cam.connect()
 
-        self.is_connected = True
+        self._is_connected = True
         self.configure()
         logger.info(f"{self} connected.")
 
@@ -200,10 +201,10 @@ class BiXarm6Follower(Robot):
         #TODO:(hkumar): Do some safety checks on the goal positions
 
         # Execute joint positions
-        self._arm[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=True)
-        self._arm[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=True)
-        self._arm[0].set_gripper_position(left_goal_pos[6], wait=False)
-        self._arm[1].set_gripper_position(right_goal_pos[6], wait=False)
+        self._arms[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=False)
+        self._arms[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=False)
+        self._arms[0].set_gripper_position(left_goal_pos[6], wait=False)
+        self._arms[1].set_gripper_position(right_goal_pos[6], wait=False)
         
 
         # Return the action that was actually sent
@@ -221,5 +222,5 @@ class BiXarm6Follower(Robot):
         for cam in self.cameras.values():
             cam.disconnect()
 
-        self.is_connected = False
+        self._is_connected = False
         logger.info(f"{self} disconnected.")

@@ -49,6 +49,7 @@ from lerobot.common.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
+    bi_xarm6_follower
 )
 from lerobot.common.teleoperators import (
     Teleoperator,
@@ -65,6 +66,7 @@ from .common.teleoperators import (  # noqa: F401
     koch_leader,
     so100_leader,
     so101_leader,
+    bi_xarm6_leader,
 )
 
 
@@ -128,6 +130,7 @@ def teleoperate(cfg: TeleoperateConfig):
 
     teleop.connect()
     robot.connect()
+    cfg.fps = 100
 
     try:
         teleop_loop(teleop, robot, cfg.fps, display_data=cfg.display_data, duration=cfg.teleop_time_s)

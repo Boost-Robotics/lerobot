@@ -43,12 +43,12 @@ class Xarm6Leader(Teleoperator):
         self.bus = DynamixelMotorsBus(
             port=self.config.port,
            motors={
-                "joint1": Motor(1, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint2": Motor(2, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint3": Motor(3, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint4": Motor(4, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint5": Motor(5, "xl330-m077", MotorNormMode.RANGE_M100_100),
-                "joint6": Motor(6, "xl330-m077", MotorNormMode.RANGE_M100_100),
+                "joint1": Motor(1, "xl330-m288", MotorNormMode.RANGE_M100_100),
+                "joint2": Motor(2, "xl330-m288", MotorNormMode.RANGE_M100_100),
+                "joint3": Motor(3, "xl330-m288", MotorNormMode.RANGE_M100_100),
+                "joint4": Motor(4, "xl330-m288", MotorNormMode.RANGE_M100_100),
+                "joint5": Motor(5, "xl330-m288", MotorNormMode.RANGE_M100_100),
+                "joint6": Motor(6, "xl330-m288", MotorNormMode.RANGE_M100_100),
                 "gripper": Motor(7, "xl330-m077", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
@@ -86,12 +86,16 @@ class Xarm6Leader(Teleoperator):
         self.bus.disable_torque()
         for motor in self.bus.motors:
             self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
-        drive_modes = {motor: 0 for motor in self.bus.motors}
+        self.bus.write("Drive_Mode", "joint5", DriveMode.INVERTED.value)
+        drive_modes = {motor: 1 if motor == "joint5" else 0 for motor in self.bus.motors}
+
+      
 
         input(f"Move {self} to the middle of its range of motion and press ENTER....")
         homing_offsets = self.bus.set_half_turn_homings()
 
-        full_turn_motors = ["joint1", "joint4", "joint6"]
+
+        full_turn_motors = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
         unknown_range_motors = [motor for motor in self.bus.motors if motor not in full_turn_motors]
         print(
             f"Move all joints except {full_turn_motors} sequentially through their "
@@ -135,6 +139,8 @@ class Xarm6Leader(Teleoperator):
         start = time.perf_counter()
         action = self.bus.sync_read("Present_Position")
         action = {f"{motor}.pos": val for motor, val in action.items()}
+        action["joint3.pos"] -= 90  # Adjust joint3 position to match the xArm6 convention
+        action["joint5.pos"] += 90  # Adjust joint5 position to match the xArm6 convention
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action
