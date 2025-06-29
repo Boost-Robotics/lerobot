@@ -22,6 +22,9 @@ from typing import Any
 from lerobot.common.cameras.utils import make_cameras_from_configs
 from lerobot.common.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from xarm.wrapper import XArmAPI
+from lerobot.common.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+from lerobot.common.cameras.realsense.camera_realsense import RealSenseCamera
+from lerobot.common.cameras.configs import ColorMode, Cv2Rotation
 
 from ..robot import Robot
 from .config_bi_xarm6_follower import BiXarm6FollowerConfig
@@ -41,9 +44,16 @@ class BiXarm6Follower(Robot):
     def __init__(self, config: BiXarm6FollowerConfig):
         super().__init__(config)
         self.config = config
-        self._is_connected = False
+        self._is_connected = False  
         self._arms = []
-        self.cameras = make_cameras_from_configs(config.cameras)
+        camera_config = {"ego": RealSenseCameraConfig(serial_number_or_name="137222072104", width=640, 
+                    height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION),
+                    "left_wrist": RealSenseCameraConfig(serial_number_or_name="137322070266", width=640, 
+                    height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION),
+                    "right_wrist": RealSenseCameraConfig(serial_number_or_name="819112071093", width=640, 
+                    height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION)}
+        # Create cameras from the configuration
+        self.cameras = make_cameras_from_configs(camera_config)
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -104,8 +114,18 @@ class BiXarm6Follower(Robot):
 
         # Connect cameras
         for cam in self.cameras.values():
-            cam.connect()
-
+            for i in range(10):
+                try:
+                    cam.connect()
+                    break 
+                except Exception as e:
+                    logger.warning(f"Failed to connect camera {cam}: {e}, iteration {i+1}/10")
+                    # If camera connection fails, we can still proceed with the robot connection
+                    cam.disconnect()
+                    if i == 9:
+                        raise DeviceNotConnectedError(f"Failed to connect camera {cam} after 10 attempts.")
+            
+           
         self._is_connected = True
         self.configure()
         logger.info(f"{self} connected.")
