@@ -1,0 +1,2 @@
+from .bi_xarm6_follower import BiXarm6Follower
+from .config_bi_xarm6_follower import BiXarm6FollowerConfig

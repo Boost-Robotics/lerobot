@@ -1,0 +1,225 @@
+#!/usr/bin/env python
+
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+import time
+from functools import cached_property
+from typing import Any
+
+from lerobot.common.cameras.utils import make_cameras_from_configs
+from lerobot.common.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from xarm.wrapper import XArmAPI
+
+from ..robot import Robot
+from .config_bi_xarm6_follower import BiXarm6FollowerConfig
+
+logger = logging.getLogger(__name__)
+
+
+class BiXarm6Follower(Robot):
+    """
+    Bimanual Xarm6 Follower Arms - manages two Xarm6 arms for bimanual tasks
+    """
+
+    config_class = BiXarm6FollowerConfig
+    name = "bi_xarm6_follower"
+
+    def __init__(self, config: BiXarm6FollowerConfig):
+        super().__init__(config)
+        self.config = config
+        self._is_connected = False
+        self._arms = []
+        self.cameras = make_cameras_from_configs(config.cameras)
+
+    @property
+    def _motors_ft(self) -> dict[str, type]:
+        """Return mapping of motor feature names to their Python types (float)."""
+        motors = {f"left_joint{i}.pos": float for i in range(1, 7)}
+        motors["left_gripper.pos"] = float
+        motors.update({f"right_joint{i}.pos": float for i in range(1, 7)})
+        motors["right_gripper.pos"] = float
+        return motors
+
+    @property
+    def _cameras_ft(self) -> dict[str, tuple]:
+        return {
+            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
+        }
+
+    @cached_property
+    def observation_features(self) -> dict[str, type | tuple]:
+        return {**self._motors_ft, **self._cameras_ft}
+
+    @cached_property
+    def action_features(self) -> dict[str, type]:
+        return self._motors_ft
+
+    @property
+    def is_connected(self) -> bool:
+        return self._is_connected
+
+    def connect(self, calibrate: bool = True) -> None:
+        """
+        We assume that at connection time, both arms are in rest position,
+        and torque can be safely disabled to run calibration.
+        """
+        if self.is_connected:
+            raise DeviceAlreadyConnectedError(f"{self} already connected")
+
+        # Connect both buses
+        left_arm = XArmAPI(self.config.left_ip, is_radian=True)
+        right_arm = XArmAPI(self.config.right_ip, is_radian=True)
+        self._arms = [left_arm, right_arm]
+        for enum_idx, arm in enumerate(self._arms):
+            arm.motion_enable(enable=False)
+            arm.connect()
+            arm.motion_enable(enable=True)
+            arm.set_mode(1)  # Position mode
+            arm.set_state(state=0)  # Sport state
+            arm.set_gripper_mode(0)
+            arm.set_gripper_enable(True)
+            arm.set_gripper_speed(5000)
+
+            # set joint positions to jacobi, read from arm
+            code, joint_positions = self._arm.get_servo_angle()
+            if code != 0:
+                raise DeviceNotConnectedError(f"Failed to get joint angles from {self}, arm: {"left" if enum_idx == 0 else "right"}")
+
+        if not self.is_calibrated and calibrate:
+            self.calibrate()
+
+        # Connect cameras
+        for cam in self.cameras.values():
+            cam.connect()
+
+        self.is_connected = True
+        self.configure()
+        logger.info(f"{self} connected.")
+
+    @property
+    # TODO (hkumar): Implement configuration for the robot if needed
+    def is_calibrated(self) -> bool:
+        return True
+
+    def calibrate(self) -> None:  # TODO (hkumar): Implement configuration for the robot if needed
+        pass
+
+    def configure(self) -> None:  # TODO (hkumar): Implement configuration for the robot if needed
+        pass
+
+    def get_observation(self) -> dict[str, Any]:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Read arm positions
+        start = time.perf_counter()
+        code_left, joints_left = self._arms[0].get_servo_angle(is_radian=True)
+        code_right, joints_right = self._arms[1].get_servo_angle(is_radian=True)
+        if code_left != 0 or code_right != 0:
+            raise DeviceNotConnectedError(f"Failed to get joint angles from {self}")
+        code_left_gripper, left_gripper_pos = self._arms[0].get_gripper_position()
+        code_right_gripper, right_gripper_pos = self._arms[1].get_gripper_position()
+        if code_left_gripper != 0 or code_right_gripper != 0:
+            raise DeviceNotConnectedError(f"Failed to get gripper positions from {self}")
+   
+        # Combine observations with prefixes
+        obs_dict = {}
+        for i, angle in enumerate(joints_left[:6]):  # First 6 angles are joints
+            obs_dict[f"left_joint{i+1}.pos"] = angle
+        obs_dict["left_gripper.pos"] =  left_gripper_pos
+        for i, angle in enumerate(joints_right[:6]):  # First 6 angles are joints
+            obs_dict[f"right_joint{i+1}.pos"] = angle
+        obs_dict["right_gripper.pos"] =  right_gripper_pos
+
+        dt_ms = (time.perf_counter() - start) * 1e3
+        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+
+        # Capture images from cameras
+        for cam_key, cam in self.cameras.items():
+            start = time.perf_counter()
+            obs_dict[cam_key] = cam.async_read()
+            dt_ms = (time.perf_counter() - start) * 1e3
+            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+        return obs_dict
+
+    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Command both arms to move to target joint configurations.
+
+        The relative action magnitude may be clipped depending on the configuration parameter
+        `max_relative_target`. In this case, the action sent differs from original action.
+        Thus, this function always returns the action actually sent.
+
+        Raises:
+            RobotDeviceNotConnectedError: if robot is not connected.
+
+        Returns:
+            the action sent to the motors, potentially clipped.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Get Left arm actions
+        left_goal_pos = []
+        for i in range(1, 7):
+            name = f"left_joint{i}.pos"
+            if name not in action:
+                raise ValueError(f"Action missing required key: {name}")
+            left_goal_pos.append(action[name])
+        if "left_gripper.pos" in action:
+            left_goal_pos.append(action["left_gripper.pos"])
+        else:
+            raise ValueError("Action missing required key: left_gripper.pos")
+        
+        # Right arm
+        right_goal_pos = []
+        for i in range(1, 7):
+            name = f"right_joint{i}.pos"
+            if name not in action:
+                raise ValueError(f"Action missing required key: {name}")
+            right_goal_pos.append(action[name])
+        if "right_gripper.pos" in action:
+            right_goal_pos.append(action["right_gripper.pos"])
+        else:
+            raise ValueError("Action missing required key: right_gripper.pos")
+ 
+     
+        #TODO:(hkumar): Do some safety checks on the goal positions
+
+        # Execute joint positions
+        self._arm[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=True)
+        self._arm[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=True)
+        self._arm[0].set_gripper_position(left_goal_pos[6], wait=False)
+        self._arm[1].set_gripper_position(right_goal_pos[6], wait=False)
+        
+
+        # Return the action that was actually sent
+        sent_action = copy.deepcopy(action)
+        return sent_action
+
+    def disconnect(self):
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        for arm in self._arms:
+            arm.disconnect()
+            self._arms = []
+
+        for cam in self.cameras.values():
+            cam.disconnect()
+
+        self.is_connected = False
+        logger.info(f"{self} disconnected.")
