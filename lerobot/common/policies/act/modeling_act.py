@@ -108,7 +108,7 @@ class ACTPolicy(PreTrainedPolicy):
             self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
     @torch.no_grad
-    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
+    def select_action(self, batch: dict[str, Tensor], force_model_run: bool = False) -> Tensor:
         """Select a single action given environment observations.
 
         This method wraps `select_actions` in order to return one action at a time for execution in the
@@ -130,6 +130,13 @@ class ACTPolicy(PreTrainedPolicy):
             # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
             # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
             self._action_queue.extend(actions.transpose(0, 1))
+        # NEW: add this elif block
+        # elif force_model_run:
+        #     batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+        #     # predict and throw away the results
+        #     # this simply allows our attention mapper to capture the attention values during the inference run
+        #     _ = self.model(batch)
+            
         return self._action_queue.popleft()
 
     @torch.no_grad

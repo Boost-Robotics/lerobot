@@ -183,6 +183,11 @@ def record_loop(
 
     timestamp = 0
     start_episode_t = time.perf_counter()
+    if policy is not None:
+        #Reset the robot to the rest position
+        print("Resetting robot to rest position")
+        robot.reset_to_rest_position()
+
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
@@ -191,6 +196,8 @@ def record_loop(
             break
 
         observation = robot.get_observation()
+
+      
 
         if policy is not None or dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, observation, prefix="observation")
@@ -204,6 +211,7 @@ def record_loop(
                 task=single_task,
                 robot_type=robot.robot_type,
             )
+         
             action = {key: action_values[i].item() for i, key in enumerate(robot.action_features)}
         elif policy is None and teleop is not None:
             action = teleop.get_action()
@@ -348,3 +356,22 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
 if __name__ == "__main__":
     record()
+
+'''
+Joint pos when the robot is at rest position:
+NAME              |    NORM
+left_joint1.pos   |   97.10
+left_joint2.pos   |  -29.41
+left_joint3.pos   |   -6.74
+left_joint4.pos   |    1.71
+left_joint5.pos   |   62.79
+left_joint6.pos   |   -0.13
+left_gripper.pos  |  800.00
+right_joint1.pos  |  -86.81
+right_joint2.pos  |  -37.76
+right_joint3.pos  |    0.82
+right_joint4.pos  |   10.95
+right_joint5.pos  |   48.11
+right_joint6.pos  |   -8.92
+right_gripper.pos |  796.67
+'''

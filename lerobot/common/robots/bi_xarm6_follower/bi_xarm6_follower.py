@@ -46,14 +46,14 @@ class BiXarm6Follower(Robot):
         self.config = config
         self._is_connected = False  
         self._arms = []
-        camera_config = {"ego": RealSenseCameraConfig(serial_number_or_name="137222072104", width=640, 
+        self.config.cameras = {"ego": RealSenseCameraConfig(serial_number_or_name="137222072104", width=640, 
                     height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION),
                     "left_wrist": RealSenseCameraConfig(serial_number_or_name="137322070266", width=640, 
                     height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION),
                     "right_wrist": RealSenseCameraConfig(serial_number_or_name="819112071093", width=640, 
                     height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION)}
         # Create cameras from the configuration
-        self.cameras = make_cameras_from_configs(camera_config)
+        self.cameras = make_cameras_from_configs(self.config.cameras)
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -82,6 +82,15 @@ class BiXarm6Follower(Robot):
     def is_connected(self) -> bool:
         return self._is_connected
 
+    def connect_arm(self, arm):
+        arm.connect()
+        arm.motion_enable(enable=True)
+        arm.set_mode(1)  # Position mode
+        arm.set_state(state=0)  # Sport state
+        arm.set_gripper_mode(0)
+        arm.set_gripper_enable(True)
+        arm.set_gripper_speed(5000)
+        
     def connect(self, calibrate: bool = True) -> None:
         """
         We assume that at connection time, both arms are in rest position,
@@ -95,13 +104,7 @@ class BiXarm6Follower(Robot):
         right_arm = XArmAPI(self.config.right_ip, is_radian=True)
         self._arms = [left_arm, right_arm]
         for enum_idx, arm in enumerate(self._arms):
-            arm.connect()
-            arm.motion_enable(enable=True)
-            arm.set_mode(1)  # Position mode
-            arm.set_state(state=0)  # Sport state
-            arm.set_gripper_mode(0)
-            arm.set_gripper_enable(True)
-            arm.set_gripper_speed(5000)
+            self.connect_arm(arm)
 
             # set joint positions to jacobi, read from arm
             code, joint_positions = self._arms[enum_idx].get_servo_angle()
@@ -221,11 +224,25 @@ class BiXarm6Follower(Robot):
         #TODO:(hkumar): Do some safety checks on the goal positions
 
         # Execute joint positions
-        self._arms[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=False)
-        self._arms[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=False)
+        
+        ret = self._arms[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=False)
+        if ret != 0:
+            #restart the arm if it fails to set the joint angles
+            logger.error(f"Failed to set joint angles for left arm, doing restart: {ret}")
+            self._arms[0].disconnect()
+            self.connect_arm(self._arms[0])
+            time.sleep(1)
+        ret = self._arms[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=False)
+        if ret != 0:
+            #restart the arm if it fails to set the joint angles
+            logger.error(f"Failed to set joint angles for right arm, doing restart: {ret}")
+            self._arms[1].disconnect()
+            self.connect_arm(self._arms[1])
+            time.sleep(1)
         self._arms[0].set_gripper_position(left_goal_pos[6], wait=False)
         self._arms[1].set_gripper_position(right_goal_pos[6], wait=False)
         
+            
 
         # Return the action that was actually sent
         sent_action = copy.deepcopy(action)
@@ -244,3 +261,23 @@ class BiXarm6Follower(Robot):
 
         self._is_connected = False
         logger.info(f"{self} disconnected.")
+
+    def reset_to_rest_position(self):
+        """Move both arms to their home position."""
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        first_angle_left = [70, -30, -25, 5, 55, 0]
+        first_angle_right = [-70, -35, -25, 5, 55, 0]
+        first_angles = [first_angle_left, first_angle_right]
+        for i in range(2):
+            arm = self._arms[i]
+            arm.set_mode(0)
+            arm.set_state(state=0)
+            ret = arm.set_servo_angle(angle=first_angles[i], speed=50, wait=True, is_radian=False)
+            if ret != 0:
+                logger.error(f"Failed to set home position for arm {i+1}, with error: {ret}")
+            arm.set_gripper_position(800, wait=True)
+            arm.set_mode(1)
+            arm.set_state(state=0)
+            

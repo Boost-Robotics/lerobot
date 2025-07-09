@@ -356,6 +356,29 @@ with profile(
             # insert code to profile, potentially whole body of eval_policy function
 ```
 
+### Merge multiple sessions
+
+If you record data over several sessions (different days, tasks, or robots) you may want to combine them into a single dataset directory so that training and evaluation scripts.
+
+```bash
+python dataset_tool_cli.py merge \\
+      --datasets "/path/to/datasetA /path/to/datasetB" \\
+      --output_dir /path/to/merged_dataset
+```
+
+### Delete a specific episode
+
+You can also delete a specific episode from a dataset, for example to remove faulty or irrelevant data:
+
+```bash
+python dataset_tool_cli.py delete \
+      --dataset_dir /path/to/dataset_to_modify \
+      --episode_id 32 \
+      --verbose
+```
+
+This will remove episode 32 from the specified dataset directory and print details of the operation if `--verbose` is enabled.
+
 ## Citation
 
 If you want, you can cite this work with:

@@ -119,7 +119,12 @@ def predict_action(
             observation[name] = observation[name].unsqueeze(0)
             observation[name] = observation[name].to(device)
 
-        observation["task"] = task if task else ""
+        if "PI0" in type(policy).__name__:
+            observation["task"] = [task] if task else [""]
+        else:
+            observation["task"] = task if task else ""
+
+        #observation["task"] = task if task else ""
         observation["robot_type"] = robot_type if robot_type else ""
 
         # Compute the next action with the policy
