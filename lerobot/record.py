@@ -188,6 +188,9 @@ def record_loop(
         print("Resetting robot to rest position")
         robot.reset_to_rest_position()
 
+    bad_fps_count = 0
+    sum_bad_fps = 0
+    count = 0
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
@@ -244,8 +247,17 @@ def record_loop(
 
         dt_s = time.perf_counter() - start_loop_t
         busy_wait(1 / fps - dt_s)
-
+        loop_s = time.perf_counter() - start_loop_t
+        if loop_s > 1 / fps + 0.002:  # Allow a small tolerance for the loop to be longer than expected
+            bad_fps_count += 1
+            sum_bad_fps += 1 / loop_s
+        count += 1
         timestamp = time.perf_counter() - start_episode_t
+    if bad_fps_count > 0:
+        logging.warning(
+            f"Loop took longer than expected {bad_fps_count} times or {bad_fps_count/count} percent, average bad fps was {sum_bad_fps/bad_fps_count} Hz."
+            "This might cause issues with the dataset fps."
+        )
 
 
 @parser.wrap()

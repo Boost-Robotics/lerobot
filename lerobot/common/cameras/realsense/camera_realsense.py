@@ -36,7 +36,24 @@ from ..configs import ColorMode
 from ..utils import get_cv2_rotation
 from .configuration_realsense import RealSenseCameraConfig
 
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, LivelinessPolicy
+from rclpy.time import Time
+from sensor_msgs.msg import JointState
+from geometry_msgs.msg import PoseStamped
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image
+
 logger = logging.getLogger(__name__)
+
+
+class Publisher(Node):
+    def __init__(self, name):
+        super().__init__(f"image_publisher_{name}")
+        self.bridge = CvBridge()
+
+     
 
 
 class RealSenseCamera(Camera):
@@ -122,6 +139,8 @@ class RealSenseCamera(Camera):
             self.serial_number = self._find_serial_number_from_name(config.serial_number_or_name)
 
         self.fps = config.fps
+        self.dataset_fps = 30.0  # Default dataset FPS, TODO(hkumar): make configurable
+        self.num_timeouts = 0
         self.color_mode = config.color_mode
         self.use_depth = config.use_depth
         self.warmup_s = config.warmup_s
@@ -141,6 +160,15 @@ class RealSenseCamera(Camera):
             self.capture_width, self.capture_height = self.width, self.height
             if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
                 self.capture_width, self.capture_height = self.height, self.width
+
+        #rclpy.init()
+        # init rlcpy if not already initialized
+        if not rclpy.ok():
+            rclpy.init(args=None)
+        self.pub = Publisher(self.config.obs_key)
+        self.pub.image_pub = self.pub.create_publisher(
+            Image, f"camera/{self.config.obs_key}/image_raw", 1
+        )
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.serial_number})"
@@ -382,10 +410,16 @@ class RealSenseCamera(Camera):
         if not ret or frame is None:
             raise RuntimeError(f"{self} read failed (status={ret}).")
 
+        
         color_frame = frame.get_color_frame()
         color_image_raw = np.asanyarray(color_frame.get_data())
 
         color_image_processed = self._postprocess_image(color_image_raw, color_mode)
+        ros_image = self.pub.bridge.cv2_to_imgmsg(color_image_processed, encoding='rgb8')
+        ros_image.header.stamp = self.pub.get_clock().now().to_msg()
+        ros_image.header.frame_id = self.config.obs_key
+        self.pub.image_pub.publish(ros_image)
+        
 
         read_duration_ms = (time.perf_counter() - start_time) * 1e3
         logger.debug(f"{self} read took: {read_duration_ms:.1f}ms")
@@ -451,17 +485,17 @@ class RealSenseCamera(Camera):
         Stops on DeviceNotConnectedError, logs other errors and continues.
         """
         while not self.stop_event.is_set():
-            try:
-                color_image = self.read(timeout_ms=500)
+             
+            color_image = self.read(timeout_ms=500)
 
-                with self.frame_lock:
-                    self.latest_frame = color_image
-                self.new_frame_event.set()
+            with self.frame_lock:
+                self.latest_frame = color_image
+            self.new_frame_event.set()
 
-            except DeviceNotConnectedError:
-                break
-            except Exception as e:
-                logger.warning(f"Error reading frame in background thread for {self}: {e}")
+            # except DeviceNotConnectedError:
+            #     break
+            # except Exception as e:
+            #     logger.warning(f"Error reading frame in background thread for {self}: {e}")
 
     def _start_read_thread(self) -> None:
         """Starts or restarts the background read thread if it's not running."""
@@ -514,16 +548,35 @@ class RealSenseCamera(Camera):
         if self.thread is None or not self.thread.is_alive():
             self._start_read_thread()
 
-        if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
-            thread_alive = self.thread is not None and self.thread.is_alive()
-            raise TimeoutError(
-                f"Timed out waiting for frame from camera {self} after {timeout_ms} ms. "
-                f"Read thread alive: {thread_alive}."
-            )
 
+        if not self.new_frame_event.is_set():
+            thread_alive = self.thread is not None and self.thread.is_alive()
+            self.num_timeouts += 1
+            if not thread_alive: 
+                print(f"Read thread for {self} is not alive, restarting it.")  
+                raise TimeoutError(
+                    f"Timed out waiting for frame from camera {self} after {timeout_ms} ms. "
+                    f"Read thread alive: {thread_alive}."
+                )
+        else:
+            self.num_timeouts = 0
+        
+        accetable_timeouts = (1 / self.fps) / (1.0 / self.dataset_fps)
+        if self.num_timeouts >  accetable_timeouts:
+            thread_alive = self.thread is not None and self.thread.is_alive()
+            print(f"More timeouts than expected for {self}: {self.num_timeouts} > {accetable_timeouts}.")
+            print(f"self.fps = {self.fps}, self.dataset_fps = {self.dataset_fps}.")
+            raise TimeoutError(
+                    f"Timed out waiting for frame from camera {self} after {timeout_ms} ms. "
+                    f"Read thread alive: {thread_alive}."
+                )
+            
+        # Safely retrieve the latest frame
+        
         with self.frame_lock:
             frame = self.latest_frame
-            self.new_frame_event.clear()
+            if self.num_timeouts == 0:
+                self.new_frame_event.clear()
 
         if frame is None:
             raise RuntimeError(f"Internal error: Event set but no frame available for {self}.")

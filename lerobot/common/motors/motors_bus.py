@@ -442,6 +442,8 @@ class MotorsBus(abc.ABC):
             if not self.port_handler.openPort():
                 raise OSError(f"Failed to open port '{self.port}'.")
             elif handshake:
+                #print(self.scan_port(self.port))
+                self.set_baudrate(2_000_000)  # Set a high baudrate to allow higher frequency communication
                 self._handshake()
         except (FileNotFoundError, OSError, serial.SerialException) as e:
             raise ConnectionError(
@@ -523,6 +525,7 @@ class MotorsBus(abc.ABC):
 
         if initial_baudrate is None:
             initial_baudrate, initial_id = self._find_single_motor(motor)
+        print("initial_baudrate:", initial_baudrate)
 
         if initial_id is None:
             _, initial_id = self._find_single_motor(motor, initial_baudrate)

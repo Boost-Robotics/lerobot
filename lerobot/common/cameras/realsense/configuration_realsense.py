@@ -54,6 +54,7 @@ class RealSenseCameraConfig(CameraConfig):
     """
 
     serial_number_or_name: str
+    obs_key: str
     color_mode: ColorMode = ColorMode.RGB
     use_depth: bool = False
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION

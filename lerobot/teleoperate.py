@@ -86,9 +86,13 @@ def teleop_loop(
 ):
     display_len = max(len(key) for key in robot.action_features)
     start = time.perf_counter()
+    bad_fps_count = 0
+    bad_fps = 0.0
+    next_time = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
-        action = teleop.get_action()
+        action = teleop.get_action() #dynamixels are limited to 30hz fucking hell.
+        observation = robot.get_observation()
         if display_data:
             observation = robot.get_observation()
             for obs, val in observation.items():
@@ -101,16 +105,27 @@ def teleop_loop(
                     rr.log(f"action_{act}", rr.Scalar(val))
 
         robot.send_action(action)
-        dt_s = time.perf_counter() - loop_start
-        busy_wait(1 / fps - dt_s)
-
+        next_time += 1.0 / fps
+        sleep_time = next_time - time.perf_counter()
+        if sleep_time > 0:
+            time.sleep(sleep_time)
         loop_s = time.perf_counter() - loop_start
 
         print("\n" + "-" * (display_len + 10))
         print(f"{'NAME':<{display_len}} | {'NORM':>7}")
         for motor, value in action.items():
-            print(f"{motor:<{display_len}} | {value:>7.2f}")
+           print(f"{motor:<{display_len}} | {value:>7.2f}")
+        print("\nright gripper obs: ", observation["right_gripper.pos"])
         print(f"\ntime: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+        # keep track of the number of times we go under the desired fps
+        
+        if abs(1 / loop_s) < fps-1:
+            bad_fps_count += 1
+            bad_fps = abs(1.0 / loop_s)
+       
+        print(f"\nbad fps count: {bad_fps_count}")
+        print(f"\ndesired fps: {fps}")
+        print(f"bad fps: {bad_fps:.2f} Hz")
 
         if duration is not None and time.perf_counter() - start >= duration:
             return

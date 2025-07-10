@@ -27,6 +27,7 @@ from lerobot.common.motors.dynamixel import (
 
 from ..teleoperator import Teleoperator
 from .config_bi_xarm6_leader import BiXarm6LeaderConfig
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class BiXarm6Leader(Teleoperator):
         from pathlib import Path
 
         import draccus
+
 
         right_calibration_path = (
             Path("/home/hans/.cache/huggingface/lerobot/calibration/teleoperators/xarm6_leader")
@@ -201,18 +203,44 @@ class BiXarm6Leader(Teleoperator):
         start = time.perf_counter()
 
         # Read from both arms
-        left_action = self.left_bus.sync_read("Present_Position")
-        right_action = self.right_bus.sync_read("Present_Position")
+        # Create threads for reading from both arms in parallel
+        left_action_result = [None]
+        right_action_result = [None]
+        
+        def read_left_arm():
+            left_action_result[0] = self.left_bus.sync_read("Present_Position")
+            
+        def read_right_arm():
+            right_action_result[0] = self.right_bus.sync_read("Present_Position")
+        
+        # Start both threads
+        left_thread = threading.Thread(target=read_left_arm)
+        right_thread = threading.Thread(target=read_right_arm)
+        left_thread.start()
+        right_thread.start()
+        
+        # Wait for both threads to complete
+        left_thread.join()
+        right_thread.join()
+        
+        # Get results
+        left_action = left_action_result[0]
+        right_action = right_action_result[0]
  
-
+        #print(f"left action: {left_action}")
         # Combine actions with prefixes
         action = {}
         for motor, val in left_action.items():
             action[f"left_{motor}.pos"] = val
+            if motor == "joint1":
+                if action[f"left_{motor}.pos"] > 377579200:
+                    action[f"left_{motor}.pos"] -= 377579200
             if motor == "joint3":
                 action[f"left_{motor}.pos"] = -action[f"left_{motor}.pos"] - 75   
             if motor == "joint5":
                 action[f"left_{motor}.pos"] += 90
+            if motor == "joint6":
+                action[f"left_{motor}.pos"] -= 180
             if motor == "gripper":
                 action[f"left_{motor}.pos"]*=8
         for motor, val in right_action.items():
@@ -221,10 +249,13 @@ class BiXarm6Leader(Teleoperator):
                 action[f"right_{motor}.pos"] = -action[f"right_{motor}.pos"] - 75  
             if motor == "joint5":
                 action[f"right_{motor}.pos"] += 90
+            if motor == "joint6":
+                action[f"right_{motor}.pos"] -= 180
             if motor == "gripper":
                 action[f"right_{motor}.pos"]*=8
 
         dt_ms = (time.perf_counter() - start) * 1e3
+        #print(f"{self} read action: {dt_ms:.1f}ms")
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action
 

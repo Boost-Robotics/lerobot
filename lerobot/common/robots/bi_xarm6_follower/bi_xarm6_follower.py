@@ -29,6 +29,7 @@ from lerobot.common.cameras.configs import ColorMode, Cv2Rotation
 from ..robot import Robot
 from .config_bi_xarm6_follower import BiXarm6FollowerConfig
 import copy
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,11 @@ class BiXarm6Follower(Robot):
         self.config = config
         self._is_connected = False  
         self._arms = []
-        self.config.cameras = {"ego": RealSenseCameraConfig(serial_number_or_name="137222072104", width=640, 
+        self.config.cameras = {"ego": RealSenseCameraConfig(serial_number_or_name="137222072104", obs_key="ego", width=640, 
                     height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION),
-                    "left_wrist": RealSenseCameraConfig(serial_number_or_name="137322070266", width=640, 
+                    "left_wrist": RealSenseCameraConfig(serial_number_or_name="137322070266", obs_key="left_wrist", width=640, 
                     height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION),
-                    "right_wrist": RealSenseCameraConfig(serial_number_or_name="819112071093", width=640, 
+                    "right_wrist": RealSenseCameraConfig(serial_number_or_name="819112071093", obs_key="right_wrist", width=640, 
                     height=480, fps=30, color_mode=ColorMode.RGB, use_depth=False, rotation=Cv2Rotation.NO_ROTATION)}
         # Create cameras from the configuration
         self.cameras = make_cameras_from_configs(self.config.cameras)
@@ -112,6 +113,9 @@ class BiXarm6Follower(Robot):
                 name = "left" if enum_idx == 0 else "right"
                 raise DeviceNotConnectedError(f"Failed to get joint angles from {self}, arm: {name}")
 
+        
+        
+
         if not self.is_calibrated and calibrate:
             self.calibrate()
 
@@ -142,34 +146,56 @@ class BiXarm6Follower(Robot):
         pass
 
     def configure(self) -> None:  # TODO (hkumar): Implement configuration for the robot if needed
-        pass
-
+        pass        
+    
+    def get_left_angles(self, left_result, left_gripper_result):
+        left_result[0], left_result[1] = self._arms[0].get_servo_angle(is_radian=False)
+        left_gripper_result[0], left_gripper_result[1] = self._arms[0].get_gripper_position()
+            
+    def get_right_angles(self, right_result, right_gripper_result):
+        right_result[0], right_result[1] = self._arms[1].get_servo_angle(is_radian=False)
+        right_gripper_result[0], right_gripper_result[1] = self._arms[1].get_gripper_position()
+            
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         # Read arm positions
         start = time.perf_counter()
-        code_left, joints_left = self._arms[0].get_servo_angle(is_radian=False)
-        code_right, joints_right = self._arms[1].get_servo_angle(is_radian=False)
+        # Run get_servo_angle commands in parallel using threads
+        left_result = [None, None]  # Store [code, joints]
+        right_result = [None, None]  # Store [code, joints]
+        left_gripper_result = [None, None]  # [code, position]
+        right_gripper_result = [None, None]  # [code, position]
+        
+        left_thread = threading.Thread(target=self.get_left_angles, args=(left_result, left_gripper_result))
+        right_thread = threading.Thread(target=self.get_right_angles, args=(right_result, right_gripper_result))
+
+        left_thread.start()
+        right_thread.start()
+        
+        left_thread.join()
+        right_thread.join()
+        
+        code_left, joints_left = left_result
+        code_right, joints_right = right_result
         if code_left != 0 or code_right != 0:
             raise DeviceNotConnectedError(f"Failed to get joint angles from {self}")
-        code_left_gripper, left_gripper_pos = self._arms[0].get_gripper_position()
-        code_right_gripper, right_gripper_pos = self._arms[1].get_gripper_position()
-        if code_left_gripper != 0 or code_right_gripper != 0:
-            raise DeviceNotConnectedError(f"Failed to get gripper positions from {self}")
+        if left_gripper_result[0] != 0 or right_gripper_result[0] != 0:
+            raise DeviceNotConnectedError(f"{self} gripper is not connected.")
    
         # Combine observations with prefixes
         obs_dict = {}
         for i, angle in enumerate(joints_left[:6]):  # First 6 angles are joints
             obs_dict[f"left_joint{i+1}.pos"] = angle
-        obs_dict["left_gripper.pos"] =  left_gripper_pos
+        obs_dict["left_gripper.pos"] =  left_gripper_result[1]  # Gripper position
         for i, angle in enumerate(joints_right[:6]):  # First 6 angles are joints
-            obs_dict[f"right_joint{i+1}.pos"] = angle
-        obs_dict["right_gripper.pos"] =  right_gripper_pos
+            obs_dict[f"right_joint{i+1}.pos"] = angle 
+        obs_dict["right_gripper.pos"] = right_gripper_result[1]  # Gripper position     
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+        #print(f"{self} read state: {dt_ms:.1f}ms")
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
@@ -177,6 +203,8 @@ class BiXarm6Follower(Robot):
             obs_dict[cam_key] = cam.async_read()
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+        dt_ms = (time.perf_counter() - start) * 1e3
+        #print(f"{self} read cameras: {dt_ms:.1f}ms")
 
         return obs_dict
 
@@ -195,6 +223,8 @@ class BiXarm6Follower(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        start = time.perf_counter()
 
         # Get Left arm actions
         left_goal_pos = []
@@ -219,30 +249,43 @@ class BiXarm6Follower(Robot):
             right_goal_pos.append(action["right_gripper.pos"])
         else:
             raise ValueError("Action missing required key: right_gripper.pos")
- 
+
+        dt_ms = (time.perf_counter() - start) * 1e3
+        #print(f"{self} send action: {dt_ms:.1f}ms")
      
         #TODO:(hkumar): Do some safety checks on the goal positions
+        # Use threads to set servo angles and gripper positions in parallel
+        def set_left_arm():
+            ret = self._arms[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=False)
+            if ret != 0:
+                logger.error(f"Failed to set joint angles for left arm, doing restart: {ret}")
+                self._arms[0].disconnect()
+                self.connect_arm(self._arms[0])
+                time.sleep(1)
+            self._arms[0].set_gripper_position(left_goal_pos[6], wait=False)
 
-        # Execute joint positions
-        
-        ret = self._arms[0].set_servo_angle_j(left_goal_pos[0:6], is_radian=False)
-        if ret != 0:
-            #restart the arm if it fails to set the joint angles
-            logger.error(f"Failed to set joint angles for left arm, doing restart: {ret}")
-            self._arms[0].disconnect()
-            self.connect_arm(self._arms[0])
-            time.sleep(1)
-        ret = self._arms[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=False)
-        if ret != 0:
-            #restart the arm if it fails to set the joint angles
-            logger.error(f"Failed to set joint angles for right arm, doing restart: {ret}")
-            self._arms[1].disconnect()
-            self.connect_arm(self._arms[1])
-            time.sleep(1)
-        self._arms[0].set_gripper_position(left_goal_pos[6], wait=False)
-        self._arms[1].set_gripper_position(right_goal_pos[6], wait=False)
-        
-            
+        def set_right_arm():
+            ret = self._arms[1].set_servo_angle_j(right_goal_pos[0:6], is_radian=False)
+            if ret != 0:
+                logger.error(f"Failed to set joint angles for right arm, doing restart: {ret}")
+                self._arms[1].disconnect()
+                self.connect_arm(self._arms[1])
+                time.sleep(1)
+            self._arms[1].set_gripper_position(right_goal_pos[6], wait=False)
+
+        # Start threads for parallel execution
+        left_thread = threading.Thread(target=set_left_arm)
+        right_thread = threading.Thread(target=set_right_arm)
+
+        left_thread.start()
+        right_thread.start()
+
+        # Wait for both actions to complete
+        left_thread.join()
+        right_thread.join()
+
+        dt_ms = (time.perf_counter() - start) * 1e3
+        #print(f"{self} send action to arms: {dt_ms:.1f}ms")
 
         # Return the action that was actually sent
         sent_action = copy.deepcopy(action)
@@ -255,7 +298,7 @@ class BiXarm6Follower(Robot):
         for arm in self._arms:
             arm.disconnect()
             self._arms = []
-
+ 
         for cam in self.cameras.values():
             cam.disconnect()
 
