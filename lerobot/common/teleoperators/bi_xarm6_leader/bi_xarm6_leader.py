@@ -233,7 +233,7 @@ class BiXarm6Leader(Teleoperator):
         for motor, val in left_action.items():
             action[f"left_{motor}.pos"] = val
             if motor == "joint1":
-                if action[f"left_{motor}.pos"] > 377579200:
+                if action[f"left_{motor}.pos"] > 377579000:
                     action[f"left_{motor}.pos"] -= 377579200
             if motor == "joint3":
                 action[f"left_{motor}.pos"] = -action[f"left_{motor}.pos"] - 75   

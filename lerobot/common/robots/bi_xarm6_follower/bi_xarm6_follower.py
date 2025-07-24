@@ -310,8 +310,8 @@ class BiXarm6Follower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        first_angle_left = [70, -30, -25, 5, 55, 0]
-        first_angle_right = [-70, -35, -25, 5, 55, 0]
+        first_angle_left = [90, -30, 0, 5, 55, -180]
+        first_angle_right = [-50, -55, 0, 5, 55, -180]
         first_angles = [first_angle_left, first_angle_right]
         for i in range(2):
             arm = self._arms[i]

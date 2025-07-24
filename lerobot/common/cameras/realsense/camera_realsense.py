@@ -36,22 +36,32 @@ from ..configs import ColorMode
 from ..utils import get_cv2_rotation
 from .configuration_realsense import RealSenseCameraConfig
 
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, LivelinessPolicy
-from rclpy.time import Time
-from sensor_msgs.msg import JointState
-from geometry_msgs.msg import PoseStamped
-from cv_bridge import CvBridge
-from sensor_msgs.msg import Image
+# Check if ROS is available
+try:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, LivelinessPolicy
+    from rclpy.time import Time
+    from sensor_msgs.msg import JointState, Image
+    from geometry_msgs.msg import PoseStamped
+    from cv_bridge import CvBridge
+    class Publisher(Node):
+        def __init__(self, name):
+            super().__init__(f"image_publisher_{name}")
+            self.bridge = CvBridge()
+    ROS_AVAILABLE = True
+    import logging
+    logging.info("ROS packages imported successfully")
+except ImportError:
+    ROS_AVAILABLE = False
+    import logging
+    logging.info("ROS packages not available")
 
 logger = logging.getLogger(__name__)
 
 
-class Publisher(Node):
-    def __init__(self, name):
-        super().__init__(f"image_publisher_{name}")
-        self.bridge = CvBridge()
+
+    
 
      
 
@@ -161,14 +171,13 @@ class RealSenseCamera(Camera):
             if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
                 self.capture_width, self.capture_height = self.height, self.width
 
-        #rclpy.init()
-        # init rlcpy if not already initialized
-        if not rclpy.ok():
-            rclpy.init(args=None)
-        self.pub = Publisher(self.config.obs_key)
-        self.pub.image_pub = self.pub.create_publisher(
-            Image, f"camera/{self.config.obs_key}/image_raw", 1
-        )
+        if ROS_AVAILABLE:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.pub = Publisher(self.config.obs_key)
+            self.pub.image_pub = self.pub.create_publisher(
+                Image, f"camera/{self.config.obs_key}/image_raw", 1
+            )
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.serial_number})"
@@ -415,10 +424,11 @@ class RealSenseCamera(Camera):
         color_image_raw = np.asanyarray(color_frame.get_data())
 
         color_image_processed = self._postprocess_image(color_image_raw, color_mode)
-        ros_image = self.pub.bridge.cv2_to_imgmsg(color_image_processed, encoding='rgb8')
-        ros_image.header.stamp = self.pub.get_clock().now().to_msg()
-        ros_image.header.frame_id = self.config.obs_key
-        self.pub.image_pub.publish(ros_image)
+        if ROS_AVAILABLE:
+            ros_image = self.pub.bridge.cv2_to_imgmsg(color_image_processed, encoding='rgb8')
+            ros_image.header.stamp = self.pub.get_clock().now().to_msg()
+            ros_image.header.frame_id = self.config.obs_key
+            self.pub.image_pub.publish(ros_image)
         
 
         read_duration_ms = (time.perf_counter() - start_time) * 1e3
@@ -561,7 +571,7 @@ class RealSenseCamera(Camera):
         else:
             self.num_timeouts = 0
         
-        accetable_timeouts = (1 / self.fps) / (1.0 / self.dataset_fps)
+        accetable_timeouts = (1 / self.fps) / (1.0 / self.dataset_fps) + 3
         if self.num_timeouts >  accetable_timeouts:
             thread_alive = self.thread is not None and self.thread.is_alive()
             print(f"More timeouts than expected for {self}: {self.num_timeouts} > {accetable_timeouts}.")
